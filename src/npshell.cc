@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdlib>
 #include <unistd.h>
+#include <sys/wait.h>
 using namespace std;
 
 int main() {
@@ -28,18 +29,24 @@ int main() {
         } else if (cmd == "exit") {
             break;
         } else {
+            vector<char *> cargs;
+            string arg;
+            cargs.push_back(const_cast<char*>(cmd.c_str()));
+            while (ss >> arg) {
+                cargs.push_back(const_cast<char*>(arg.c_str()));
+            }
+            cargs.push_back(NULL);
+            int pid;
+            if ((pid = fork()) == 0) {
+                exit(execvp(cmd.c_str(), &cargs[0]));
+            } else {
+                int status;
+                waitpid(pid, &status, 0);
+                status = WEXITSTATUS(status);
+                if (status == 255) {
+                    cout << "Unknown command: [" << cmd << "]" << endl;
+                }
+            }
         }
     } while (true);
-    /*
-    char* env_p = std::getenv("PATH");
-    cout << env_p << endl;
-    vector<string> args = {"cat", "test.html"};
-    vector<char *> cargs;
-    for (auto it = args.begin(); it != args.end(); ++it)
-        cargs.push_back(const_cast<char*>(it->c_str()));
-    cargs.push_back(NULL);
-    //char *args[3] = {"cat", "test.html", NULL};
-    cout << cargs.size() << endl;
-    execvp("cat", &cargs[0]);
-    return 0;*/
 }
