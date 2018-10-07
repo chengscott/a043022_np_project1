@@ -5,19 +5,65 @@
 #include <cstdlib>
 #include <unistd.h>
 #include <sys/wait.h>
+#define DBG(x, ...) fprintf(stderr, x, __VA_ARGS__);
+#define DBG(x, ...) 0;
 using namespace std;
 
-void execute(int n, const vector<vector<string> >& args) {
+void convert(const vector<string>& from, vector<char *>& to) {
     // convert c++ string to c string
-    vector<char *> carg;
-    auto it_end = args[n].end();
-    for (auto it = args[n].begin(); it != it_end; ++it)
-        carg.push_back(const_cast<char *>(it->c_str()));
-    carg.push_back(NULL);
-    if (n != args.size()) {
-        // execute(n + 1, args);
+    auto it_end = from.end();
+    for (auto it = from.begin(); it != it_end; ++it)
+        to.push_back(const_cast<char *>(it->c_str()));
+    to.push_back(NULL);
+}
+
+int exec(const vector<vector<string> >& args) {
+    vector<char *> arg;
+    size_t i, cur;
+    const size_t len = args.size();
+    int status, pid[2], fd[2][4];
+    for (i = 0; i < len; ++i) {
+        cur = i & 1;
+        pipe(&fd[cur][0]);
+        if ((pid[cur] = fork()) == 0) {
+            // fd[0] -> stdin
+            if (i != 0) {
+                DBG("#%d %d: fd[%d][0] -> stdin\n", __LINE__, i, 1 - cur);
+                close(fd[1 - cur][1]);
+                dup2(fd[1 - cur][0], 0);
+            }
+            // stdout -> fd[1]
+            if (i != len - 1) {
+                DBG("#%d %d: fd[%d][1] -> stdout\n", __LINE__, i, cur);
+                close(fd[cur][0]);
+                dup2(fd[cur][1], 1);
+            } else {
+                DBG("#%d %d: fd[%d] closed\n", __LINE__, i, cur);
+                close(fd[cur][0]);
+                close(fd[cur][1]);
+            }
+            convert(args[i], arg);
+            DBG("#%d %d: exec %s\n", __LINE__, i, arg[0]);
+            exit(execvp(arg[0], &arg[0]));
+        }
+        if (i != 0) {
+            DBG("#%d %d wait for %d\n", __LINE__, i, 1 - cur);
+            waitpid(pid[1 - cur], &status, 0);
+            close(fd[1 - cur][0]);
+            close(fd[1 - cur][1]);
+            DBG("#%d %d wait for %d is done\n", __LINE__, i, 1 - cur);
+            if (WEXITSTATUS(status) == 255)
+                cout << "Unknown command: [" << arg[0] << "]" << endl;
+        }
     }
-    exit(execvp(carg[0], &carg[0]));
+    if (len != 0) {
+        DBG("#%d %d wait for %d\n", __LINE__, i, cur);
+        waitpid(pid[cur], &status, 0);
+        DBG("#%d %d wait for %d is done\n", __LINE__, i, cur);
+        if (WEXITSTATUS(status) == 255)
+            cout << "Unknown command: [" << arg[0] << "]" << endl;
+    }
+    return 0;
 }
 
 int main() {
@@ -49,8 +95,8 @@ int main() {
         } else {
             // parse all commands and arguments
             vector<vector<string> > args;
-            bool has_next;
-            do {
+            bool has_next = (cmd.size() != 0);
+            while (has_next) {
                 has_next = false;
                 vector<string> argv = { cmd };
                 while (ss >> arg) {
@@ -62,18 +108,13 @@ int main() {
                     argv.push_back(arg);
                 }
                 args.emplace_back(argv);
-            } while (has_next);
+            }
             // execute commands
             int pid;
             if ((pid = fork()) == 0) {
-                execute(0, args);
+                exit(exec(args));
             } else {
-                int status;
-                waitpid(pid, &status, 0);
-                status = WEXITSTATUS(status);
-                if (status == 255) {
-                    cout << "Unknown command: [" << cmd << "]" << endl;
-                }
+                wait(NULL);
             }
         }
     } while (true);
