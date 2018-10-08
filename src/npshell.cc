@@ -1,24 +1,23 @@
-#include <iostream>
-#include <string>
-#include <sstream>
-#include <vector>
-#include <cstdlib>
-#include <unistd.h>
 #include <sys/wait.h>
-#define DBG(x, ...) fprintf(stderr, x, __VA_ARGS__);
+#include <unistd.h>
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+//#define DBG(x, ...) fprintf(stderr, x, __VA_ARGS__);
 #define DBG(x, ...) 0;
 using namespace std;
 
-void convert(const vector<string>& from, vector<char *>& to) {
-    // convert c++ string to c string
+void convert(const vector<string> &from, vector<char *> &to) {
+    // convert vector of c++ string to vector of c string
     auto it_end = from.end();
     for (auto it = from.begin(); it != it_end; ++it)
         to.push_back(const_cast<char *>(it->c_str()));
     to.push_back(NULL);
 }
 
-int exec(const vector<vector<string> >& args) {
-    vector<char *> arg;
+int exec(const vector<vector<string>> &args) {
     size_t i, cur;
     const size_t len = args.size();
     int status, pid[2], fd[2][4];
@@ -42,6 +41,7 @@ int exec(const vector<vector<string> >& args) {
                 close(fd[cur][0]);
                 close(fd[cur][1]);
             }
+            vector<char *> arg;
             convert(args[i], arg);
             DBG("#%d %d: exec %s\n", __LINE__, i, arg[0]);
             exit(execvp(arg[0], &arg[0]));
@@ -53,16 +53,14 @@ int exec(const vector<vector<string> >& args) {
             close(fd[1 - cur][1]);
             DBG("#%d %d wait for %d is done\n", __LINE__, i, 1 - cur);
             if (WEXITSTATUS(status) == 255)
-                cout << "Unknown command: [" << arg[0] << "]" << endl;
+                cout << "Unknown command: [" << args[i - 1][0] << "]" << endl;
         }
     }
-    if (len != 0) {
-        DBG("#%d %d wait for %d\n", __LINE__, i, cur);
-        waitpid(pid[cur], &status, 0);
-        DBG("#%d %d wait for %d is done\n", __LINE__, i, cur);
-        if (WEXITSTATUS(status) == 255)
-            cout << "Unknown command: [" << arg[0] << "]" << endl;
-    }
+    DBG("#%d %d wait for %d\n", __LINE__, i, cur);
+    waitpid(pid[cur], &status, 0);
+    DBG("#%d %d wait for %d is done\n", __LINE__, i, cur);
+    if (WEXITSTATUS(status) == 255)
+        cout << "Unknown command: [" << args[i - 1][0] << "]" << endl;
     return 0;
 }
 
@@ -93,12 +91,13 @@ int main() {
             // synopsis: exit
             break;
         } else {
+            if (cmd.size() == 0) continue;
             // parse all commands and arguments
-            vector<vector<string> > args;
-            bool has_next = (cmd.size() != 0);
+            vector<vector<string>> args;
+            bool has_next = true;
             while (has_next) {
                 has_next = false;
-                vector<string> argv = { cmd };
+                vector<string> argv = {cmd};
                 while (ss >> arg) {
                     if (arg == ">" || arg[0] == '|' || arg[0] == '!') {
                         has_next = true;
