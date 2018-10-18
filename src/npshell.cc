@@ -1,3 +1,5 @@
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstdlib>
@@ -107,8 +109,13 @@ int main() {
         } else {
             if (cmd.size() == 0) continue;
             line = (line + 1) % 2000;
-            int np = -1;
-            bool out_err;
+            /* mode
+             0: stdout to overwrite file
+             10: single line stdout pipe (default)
+             20: stdout numbered pipe
+             21: stdout stderr numbered pipe
+            */
+            int np = -1, mode = 10;
             // parse all commands and arguments
             vector<vector<string>> args;
             bool has_next = true;
@@ -117,6 +124,7 @@ int main() {
                 vector<string> argv = {cmd};
                 while (ss >> arg) {
                     if (arg == ">") {
+                        mode = 0;
                         ss >> cmd;
                         break;
                     } else if (arg == "|") {
@@ -124,8 +132,9 @@ int main() {
                         ss >> cmd;
                         break;
                     } else if (arg[0] == '|' || arg[0] == '!') {
+                        // assert(np > 0)
                         np = stoi(arg.substr(1, arg.size() - 1));
-                        out_err = (arg[0] == '!');
+                        mode = 20 + (arg[0] == '!' ? 1 : 0);
                         break;
                     }
                     argv.push_back(arg);
@@ -134,7 +143,12 @@ int main() {
             }
             // execute commands
             int nline = (line + np) % 2000;
-            if (np != -1 && !IS_PIPE(fd_table[nline][0])) pipe(fd_table[nline]);
+            if ((mode == 20 || mode == 21) && !IS_PIPE(fd_table[nline][0]))
+                pipe(fd_table[nline]);
+            if (mode == 0)
+                fd_table[nline][1] =
+                    open(cmd.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
+                         S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
             int pid;
             if ((pid = fork()) == 0) {
                 if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
@@ -145,7 +159,7 @@ int main() {
             }
             if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
             if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
-            if (np == -1) {
+            if (mode < 20) {
                 DBG("#%d npshell wait for (%d)\n", __LINE__, pid);
                 waitpid(pid, NULL, 0);
                 DBG("#%d npshell wait for (%d) is done\n", __LINE__, pid);
