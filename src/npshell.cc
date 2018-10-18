@@ -21,7 +21,7 @@ void convert(const vector<string> &from, vector<char *> &to) {
 }
 
 int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
-         int fdout) {
+         int fdout, int mode) {
     size_t i, cur;
     const size_t len = args.size();
     int status, pid[2], fd[2][2];
@@ -42,6 +42,7 @@ int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
                 dup2(fd[cur][1], 1);
             } else {
                 dup2(fdout, 1);
+                if (mode == 21) dup2(fdout, 2);
             }
             vector<char *> arg;
             convert(args[i], arg);
@@ -57,7 +58,7 @@ int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
             close(fd[1 - cur][0]);
             close(fd[1 - cur][1]);
             if (WEXITSTATUS(status) == 255)
-                cout << "Unknown command: [" << args[i - 1][0] << "]" << endl;
+                cout << "Unknown command: [" << args[i - 1][0] << "]." << endl;
         } else {
             for (int pid : pidin) {
                 DBG("#%d %zu wait for (%d)\n", __LINE__, i, pid);
@@ -72,7 +73,7 @@ int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
     waitpid(pid[cur], &status, 0);
     DBG("#%d %zu wait for %zu (%d) is done\n", __LINE__, i, cur, pid[cur]);
     if (WEXITSTATUS(status) == 255)
-        cout << "Unknown command: [" << args[i - 1][0] << "]" << endl;
+        cout << "Unknown command: [" << args[i - 1][0] << "]." << endl;
     return 0;
 }
 
@@ -154,7 +155,7 @@ int main() {
                 if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
                 if (IS_PIPE(fd_table[nline][0])) close(fd_table[nline][0]);
                 exec(args, pid_table[line], fd_table[line][0],
-                     fd_table[nline][1]);
+                     fd_table[nline][1], mode);
                 exit(0);
             }
             if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
