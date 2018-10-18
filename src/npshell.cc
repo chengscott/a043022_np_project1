@@ -3,6 +3,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -20,15 +21,21 @@ void convert(const vector<string> &from, vector<char *> &to) {
     to.push_back(NULL);
 }
 
-int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
-         int fdout, int mode) {
-    size_t i, cur;
+vector<int> exec(const vector<vector<string>> &args, deque<int> &pidin,
+                 int fdin, int fdout, int mode) {
+    // fdin -> (exec args)  -> fdout
     const size_t len = args.size();
-    int status, pid[2], fd[2][2];
+    size_t i, cur;
+    vector<int> ret;
+    int pid[2], fd[2][2];
     for (i = 0; i < len; ++i) {
         cur = i & 1;
         if (i != len - 1) pipe(fd[cur]);
-        if ((pid[cur] = fork()) == 0) {
+        while ((pid[cur] = fork()) == -1) {
+            waitpid(pidin.front(), NULL, 0);
+            pidin.pop_front();
+        }
+        if (pid[cur] == 0) {
             // fd[0] -> stdin
             if (i != 0) {
                 close(fd[1 - cur][1]);
@@ -47,34 +54,17 @@ int exec(const vector<vector<string>> &args, const vector<int> &pidin, int fdin,
             vector<char *> arg;
             convert(args[i], arg);
             DBG("#%d %zu: exec %s\n", __LINE__, i, arg[0]);
-            exit(execvp(arg[0], &arg[0]));
+            execvp(arg[0], &arg[0]);
+            cerr << "Unknown command: [" << arg[0] << "]." << endl;
+            exit(0);
         }
+        ret.push_back(pid[cur]);
         if (i != 0) {
-            DBG("#%d %zu wait for %zu (%d)\n", __LINE__, i, 1 - cur,
-                pid[1 - cur]);
-            waitpid(pid[1 - cur], &status, 0);
-            DBG("#%d %zu wait for %zu (%d) is done\n", __LINE__, i, 1 - cur,
-                pid[1 - cur]);
             close(fd[1 - cur][0]);
             close(fd[1 - cur][1]);
-            if (WEXITSTATUS(status) == 255)
-                cout << "Unknown command: [" << args[i - 1][0] << "]." << endl;
-        } else {
-            for (int pid : pidin) {
-                DBG("#%d %zu wait for (%d)\n", __LINE__, i, pid);
-                waitpid(pid, NULL, 0);
-                DBG("#%d %zu wait for (%d) is done\n", __LINE__, i, pid);
-            }
-            if (IS_PIPE(fdin)) close(fdin);
         }
     }
-    if (IS_PIPE(fdout)) close(fdout);
-    DBG("#%d %zu wait for %zu (%d)\n", __LINE__, i, cur, pid[cur]);
-    waitpid(pid[cur], &status, 0);
-    DBG("#%d %zu wait for %zu (%d) is done\n", __LINE__, i, cur, pid[cur]);
-    if (WEXITSTATUS(status) == 255)
-        cout << "Unknown command: [" << args[i - 1][0] << "]." << endl;
-    return 0;
+    return ret;
 }
 
 int main() {
@@ -83,7 +73,7 @@ int main() {
     string cmd, arg;
     // numbered pipe
     int line, fd_table[2000][2];
-    vector<int> pid_table[2000];
+    deque<int> pid_table[2000];
     for (size_t i = 0; i < 2000; ++i) fd_table[i][0] = 0, fd_table[i][1] = 1;
     do {
         // prompt string
@@ -150,22 +140,16 @@ int main() {
                 fd_table[nline][1] =
                     open(cmd.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
                          S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-            int pid;
-            if ((pid = fork()) == 0) {
-                if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
-                if (IS_PIPE(fd_table[nline][0])) close(fd_table[nline][0]);
-                exec(args, pid_table[line], fd_table[line][0],
-                     fd_table[nline][1], mode);
-                exit(0);
-            }
-            if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
             if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
+            vector<int> pid = exec(args, pid_table[line], fd_table[line][0],
+                                   fd_table[nline][1], mode);
+            if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
             if (mode < 20) {
-                DBG("#%d npshell wait for (%d)\n", __LINE__, pid);
-                waitpid(pid, NULL, 0);
-                DBG("#%d npshell wait for (%d) is done\n", __LINE__, pid);
+                for (int p : pid_table[line]) waitpid(p, NULL, 0);
+                for (int p : pid) waitpid(p, NULL, 0);
             } else {
-                pid_table[nline].push_back(pid);
+                pid_table[nline].insert(pid_table[nline].end(), pid.begin(),
+                                        pid.end());
             }
             // cleanup current line
             fd_table[line][0] = 0;
