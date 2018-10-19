@@ -21,12 +21,11 @@ void convert(const vector<string> &from, vector<char *> &to) {
     to.push_back(NULL);
 }
 
-vector<int> exec(const vector<vector<string>> &args, deque<int> &pidin,
+void exec(const vector<vector<string>> &args, deque<int> &pidin, deque<int> &pidout,
                  int fdin, int fdout, int mode) {
     // fdin -> (exec args)  -> fdout
     const size_t len = args.size();
     size_t i, cur;
-    vector<int> ret;
     int pid[2], fd[2][2];
     for (i = 0; i < len; ++i) {
         cur = i & 1;
@@ -58,13 +57,12 @@ vector<int> exec(const vector<vector<string>> &args, deque<int> &pidin,
             cerr << "Unknown command: [" << arg[0] << "]." << endl;
             exit(0);
         }
-        ret.push_back(pid[cur]);
+        pidout.push_back(pid[cur]);
         if (i != 0) {
             close(fd[1 - cur][0]);
             close(fd[1 - cur][1]);
         }
     }
-    return ret;
 }
 
 int main() {
@@ -141,15 +139,11 @@ int main() {
                     open(cmd.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
                          S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
             if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
-            vector<int> pid = exec(args, pid_table[line], fd_table[line][0],
-                                   fd_table[nline][1], mode);
+            exec(args, pid_table[line], mode < 20 ? pid_table[line] : pid_table[nline],
+                fd_table[line][0], fd_table[nline][1], mode);
             if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
             if (mode < 20) {
                 for (int p : pid_table[line]) waitpid(p, NULL, 0);
-                for (int p : pid) waitpid(p, NULL, 0);
-            } else {
-                pid_table[nline].insert(pid_table[nline].end(), pid.begin(),
-                                        pid.end());
             }
             // cleanup current line
             fd_table[line][0] = 0;
