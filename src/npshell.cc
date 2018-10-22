@@ -2,6 +2,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <deque>
 #include <iostream>
@@ -9,7 +11,6 @@
 #include <string>
 #include <vector>
 //#define DBG(x, ...) fprintf(stderr, x, __VA_ARGS__);
-#define DBG(x, ...) 0;
 #define IS_PIPE(x) ((x) > 2)
 using namespace std;
 
@@ -21,19 +22,34 @@ void convert(const vector<string> &from, vector<char *> &to) {
     to.push_back(NULL);
 }
 
-void exec(const vector<vector<string>> &args, deque<int> &pidin, deque<int> &pidout,
-                 int fdin, int fdout, int mode) {
+void mywait(deque<int> &pid) {
+    int p;
+    bool has_wait = false;
+    // clean up finished process
+    while ((p = waitpid(-1, NULL, WNOHANG)) > 0) {
+        pid.erase(std::remove(pid.begin(), pid.end(), p), pid.end());
+        has_wait = true;
+    }
+    if (has_wait) return;
+    // wait for the front of deque
+    if (!pid.empty()) {
+        waitpid(pid.front(), NULL, 0);
+        pid.pop_front();
+    }
+}
+
+void exec(const vector<vector<string>> &args, deque<int> &pidout, int fdin,
+          int fdout, int mode) {
     // fdin -> (exec args)  -> fdout
     const size_t len = args.size();
     size_t i, cur;
     int pid[2], fd[2][2];
     for (i = 0; i < len; ++i) {
         cur = i & 1;
-        if (i != len - 1) pipe(fd[cur]);
-        while ((pid[cur] = fork()) == -1) {
-            waitpid(pidin.front(), NULL, 0);
-            pidin.pop_front();
+        if (i != len - 1) {
+            while (pipe(fd[cur]) == -1) mywait(pidout);
         }
+        while ((pid[cur] = fork()) == -1) mywait(pidout);
         if (pid[cur] == 0) {
             // fd[0] -> stdin
             if (i != 0) {
@@ -52,7 +68,6 @@ void exec(const vector<vector<string>> &args, deque<int> &pidin, deque<int> &pid
             }
             vector<char *> arg;
             convert(args[i], arg);
-            DBG("#%d %zu: exec %s\n", __LINE__, i, arg[0]);
             execvp(arg[0], &arg[0]);
             cerr << "Unknown command: [" << arg[0] << "]." << endl;
             exit(0);
@@ -66,13 +81,16 @@ void exec(const vector<vector<string>> &args, deque<int> &pidin, deque<int> &pid
 }
 
 int main() {
-    // set default environment variables
+    // default environment variables
     setenv("PATH", "bin:.", 1);
-    string cmd, arg;
+    // default file permission mask 0666
+    mode_t file_perm =
+        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
     // numbered pipe
     int line, fd_table[2000][2];
-    deque<int> pid_table[2000];
     for (size_t i = 0; i < 2000; ++i) fd_table[i][0] = 0, fd_table[i][1] = 1;
+    deque<int> pid_table[2000];
+    string cmd, arg;
     do {
         // prompt string
         cout << "% ";
@@ -83,6 +101,8 @@ int main() {
         }
         stringstream ss(cmd);
         ss >> cmd;
+        if (cmd.size() == 0) continue;
+        line = (line + 1) % 2000;
         if (cmd == "setenv") {
             // synopsis: setenv [environment variable] [value to assign]
             ss >> cmd >> arg;
@@ -96,8 +116,6 @@ int main() {
             // synopsis: exit
             break;
         } else {
-            if (cmd.size() == 0) continue;
-            line = (line + 1) % 2000;
             /* mode
              0: stdout to overwrite file
              10: single line stdout pipe (default)
@@ -121,8 +139,8 @@ int main() {
                         ss >> cmd;
                         break;
                     } else if (arg[0] == '|' || arg[0] == '!') {
-                        // assert(np > 0)
                         np = stoi(arg.substr(1, arg.size() - 1));
+                        assert(np > 0);
                         mode = 20 + (arg[0] == '!' ? 1 : 0);
                         break;
                     }
@@ -130,25 +148,35 @@ int main() {
                 }
                 args.emplace_back(argv);
             }
-            // execute commands
+            // enqueue previous pid
             int nline = (line + np) % 2000;
-            if ((mode == 20 || mode == 21) && !IS_PIPE(fd_table[nline][0]))
-                pipe(fd_table[nline]);
-            if (mode == 0)
+            pid_table[nline].insert(pid_table[nline].begin(),
+                                    pid_table[line].begin(),
+                                    pid_table[line].end());
+            pid_table[line].clear();
+            // prepare fd
+            if (mode == 0) {
+                // 0: open file
                 fd_table[nline][1] =
-                    open(cmd.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
-                         S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                    open(cmd.c_str(), O_WRONLY | O_CREAT | O_TRUNC, file_perm);
+            } else if (mode == 20 || mode == 21) {
+                // 20, 21: open numbered pipe
+                if (!IS_PIPE(fd_table[nline][0]))
+                    while (pipe(fd_table[nline]) == -1)
+                        mywait(pid_table[nline]);
+            }
+            // execute commands
             if (IS_PIPE(fd_table[line][1])) close(fd_table[line][1]);
-            exec(args, pid_table[line], mode < 20 ? pid_table[line] : pid_table[nline],
-                fd_table[line][0], fd_table[nline][1], mode);
+            exec(args, pid_table[nline], fd_table[line][0], fd_table[nline][1],
+                 mode);
             if (IS_PIPE(fd_table[line][0])) close(fd_table[line][0]);
+            // wait for current line
             if (mode < 20) {
-                for (int p : pid_table[line]) waitpid(p, NULL, 0);
+                for (int p : pid_table[nline]) waitpid(p, NULL, 0);
             }
             // cleanup current line
             fd_table[line][0] = 0;
             fd_table[line][1] = 1;
-            pid_table[line].clear();
         }
     } while (true);
 }
